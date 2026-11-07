@@ -70,7 +70,7 @@ Semantics mirror Yazi's own paste:
 - Everything else — including an empty yank — falls back to Yazi's native `paste`, so local workflows are unaffected.
 - Copy: the tree is planned first (`gio mkdir -p` for the directories that are missing), then files are copied per destination directory with `gio copy -p`.
 - Cut: a same-mount move is done with `gio move` (a rename, instant); cross-storage moves are copy + recursive delete, because `gio remove` is not recursive.
-- After a successful run: `refresh`, and for a cut also `unyank`.
+- After a successful run the new entries are pushed into Yazi's model as a `FilesOp::Upsert` patch. A plain `refresh` is not enough: Yazi re-reads a directory only when its own stat changes, and GVFS backends such as MTP keep the directory mtime and size frozen, so the refresh is skipped and the listing stays stale. For a cut, `unyank` is emitted as well.
 - Mount URIs are resolved once per mount with `gio info` on the mount root, then the percent-encoded relative path is appended. The FUSE directory name (`mtp:host=…`, `smb-share:server=…,share=…`) is not a reversible URI encoding, so it cannot be parsed directly.
 - Failures are reported as notifications with `gio`'s own stderr.
 
@@ -80,7 +80,9 @@ Semantics mirror Yazi's own paste:
 
 Progress is per file: a single huge file produces no intermediate updates, because `gio` does not stream byte-level progress.
 
-To cancel, open the task manager (`w` by default) and press `x` on the `Run plugin 'gio-paste'` task. Yazi drops the plugin's future and the running `gio` child is killed with it (`kill_on_drop`), so no orphan processes are left. There is no rollback: files copied before the cancel stay on the destination, and for a cut the source of an unfinished item is not deleted.
+To cancel, open the task manager (`w` by default), **select the `Run plugin 'gio-paste'` task** (`j`/`k`) and press `x`. The list may contain other long-running plugin tasks — for example `gvfs.yazi` keeps `Run plugin 'gvfs'` there — and `x` only cancels the task under the cursor.
+
+Yazi drops the plugin's future and the running `gio` child is killed with it (`kill_on_drop`), so no orphan processes are left. The cancellation is abrupt: the file being written is discarded, nothing is rolled back, and for a cut the source of an unfinished item is not deleted. On MTP an interrupted transfer can leave the device responder stuck (`ls` on the mount hangs, `gio mount -u` reports "File system is busy"); replugging the device is the way out, so prefer letting large transfers finish.
 
 ## Limitations
 

@@ -37,14 +37,18 @@ local snapshot = ya.sync(function()
 	local cwd = cx.active.current.cwd
 	local dest = cwd and tostring(cwd.path) or ""
 	if dest == "" then
-		return { dest = "", cut = false, paths = {} }
+		return { dest = "", cut = false, paths = {}, names = {} }
 	end
 
-	local paths = {}
+	local paths, names = {}, {}
 	for _, f in pairs(cx.yanked) do
 		paths[#paths + 1] = tostring(f.path)
 	end
-	return { dest = dest, cut = cx.yanked.is_cut == true, paths = paths }
+	local files = cx.active.current.files
+	for i = 1, #files do
+		names[tostring(files[i].name)] = true
+	end
+	return { dest = dest, cut = cx.yanked.is_cut == true, paths = paths, names = names }
 end)
 
 local function notify(level, title, body)
@@ -509,6 +513,33 @@ local function execute(item, ctx)
 	return true
 end
 
+
+--- Make yazi notice entries created through D-Bus.
+--- A plain `refresh` is not enough: yazi's watcher re-reads a directory only
+--- when its own stat changes (`Entries::revalidate`), and GVFS backends such as
+--- MTP keep the directory mtime/size frozen. So the new top-level entries are
+--- injected as a `FilesOp::Upsert` patch instead.
+local function upsert_listing(dest_path, known)
+	local entries = fs.read_dir(Url(dest_path), { resolve = true })
+	if not entries then
+		return
+	end
+
+	local files, any = {}, false
+	for i = 1, #entries do
+		local file = entries[i]
+		local name = tostring(file.name)
+		if name ~= "" and not known[name] then
+			files[Path.os(name)] = file
+			any = true
+		end
+	end
+
+	if any then
+		ya.emit("update_files", { op = fs.op("upsert", { url = Url(dest_path), files = files }) })
+	end
+end
+
 function M:entry(job)
 	local force = job.args and job.args.force == true
 
@@ -653,6 +684,7 @@ function M:entry(job)
 	if state.cut and #failed == 0 then
 		ya.emit("unyank", {})
 	end
+	upsert_listing(dest_path, state.names or {})
 	ya.emit("refresh", {})
 
 	if #failed == 0 then
